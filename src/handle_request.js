@@ -2,6 +2,15 @@ import { handleVerification } from './verify_keys.js';
 import openai from './openai.mjs';
 
 export async function handleRequest(request) {
+  // 添加全局 API Key 验证
+  const apiKey = request.headers.get("X-API-Key");
+  const allowedKeys = Deno.env.get("ALLOWED_KEYS")?.split(",") || [];
+  if (!apiKey || !allowedKeys.includes(apiKey)) {
+    return new Response(JSON.stringify({ error: "Invalid API Key" }), {
+      status: 401,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
 
   const url = new URL(request.url);
   const pathname = url.pathname;
@@ -36,15 +45,14 @@ export async function handleRequest(request) {
           headers.set('x-goog-api-key', selectedKey);
         }
       } else {
-        if (key.trim().toLowerCase()==='content-type')
-        {
-           headers.set(key, value);
+        if (key.trim().toLowerCase() === 'content-type') {
+          headers.set(key, value);
         }
       }
     }
 
     console.log('Request Sending to Gemini')
-    console.log('targetUrl:'+targetUrl)
+    console.log('targetUrl:' + targetUrl)
     console.log(headers)
 
     const response = await fetch(targetUrl, {
@@ -72,10 +80,10 @@ export async function handleRequest(request) {
     });
 
   } catch (error) {
-   console.error('Failed to fetch:', error);
-   return new Response('Internal Server Error\n' + error?.stack, {
-    status: 500,
-    headers: { 'Content-Type': 'text/plain' }
-   });
+    console.error('Failed to fetch:', error);
+    return new Response('Internal Server Error\n' + error?.stack, {
+      status: 500,
+      headers: { 'Content-Type': 'text/plain' }
+    });
+  }
 }
-};
