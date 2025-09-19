@@ -2,20 +2,11 @@ import { handleVerification } from './verify_keys.js';
 import openai from './openai.mjs';
 
 export async function handleRequest(request) {
-  // 添加全局 API Key 验证
-  const apiKey = request.headers.get("X-API-Key");
-  const allowedKeys = process.env("ALLOWED_KEYS")?.split(",") || [];
-  if (!apiKey || !allowedKeys.includes(apiKey)) {
-    return new Response(JSON.stringify({ error: "Invalid API Key" }), {
-      status: 401,
-      headers: { "Content-Type": "application/json" },
-    });
-  }
-
   const url = new URL(request.url);
   const pathname = url.pathname;
   const search = url.search;
 
+  // 公开路径：根路径，不需要 API Key
   if (pathname === '/' || pathname === '/index.html') {
     return new Response('Proxy is Running!  More Details: https://github.com/tech-shrimp/gemini-balance-lite', {
       status: 200,
@@ -23,8 +14,19 @@ export async function handleRequest(request) {
     });
   }
 
+  // 公开路径：/verify POST 请求，不需要 API Key（假设这是验证工具）
   if (pathname === '/verify' && request.method === 'POST') {
     return handleVerification(request);
+  }
+
+  // 从这里开始，对其他路径添加 API Key 验证（保护代理 API）
+  const apiKey = request.headers.get("X-API-Key");
+  const allowedKeys = process.env.ALLOWED_KEYS ? process.env.ALLOWED_KEYS.split(",") : [];
+  if (!apiKey || !allowedKeys.includes(apiKey)) {
+    return new Response(JSON.stringify({ error: "Invalid API Key" }), {
+      status: 401,
+      headers: { "Content-Type": "application/json" },
+    });
   }
 
   // 处理OpenAI格式请求
@@ -86,4 +88,4 @@ export async function handleRequest(request) {
       headers: { 'Content-Type': 'text/plain' }
     });
   }
-}
+};
