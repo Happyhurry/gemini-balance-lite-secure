@@ -6,6 +6,13 @@ export async function handleRequest(request) {
   const pathname = url.pathname;
   const search = url.search;
 
+  // 打印所有传入 headers 以调试
+  const incomingHeaders = {};
+  for (const [key, value] of request.headers.entries()) {
+    incomingHeaders[key] = value;
+  }
+  console.log('Incoming Headers:', JSON.stringify(incomingHeaders));
+
   // 公开路径：根路径，不需要 API Key
   if (pathname === '/' || pathname === '/index.html') {
     return new Response('Proxy is Running!  More Details: https://github.com/tech-shrimp/gemini-balance-lite', {
@@ -14,12 +21,12 @@ export async function handleRequest(request) {
     });
   }
 
-  // 公开路径：/verify POST 请求，不需要 API Key（假设这是验证工具）
+  // 公开路径：/verify POST 请求，不需要 API Key
   if (pathname === '/verify' && request.method === 'POST') {
     return handleVerification(request);
   }
 
-  // 从这里开始，对其他路径添加 API Key 验证（保护代理 API）
+  // 从这里开始，对其他路径添加 API Key 验证
   const apiKey = request.headers.get("X-API-Key");
   const allowedKeys = process.env.ALLOWED_KEYS ? process.env.ALLOWED_KEYS.split(",") : [];
   if (!apiKey || !allowedKeys.includes(apiKey)) {
@@ -41,21 +48,23 @@ export async function handleRequest(request) {
     for (const [key, value] of request.headers.entries()) {
       if (key.trim().toLowerCase() === 'x-goog-api-key') {
         const apiKeys = value.split(',').map(k => k.trim()).filter(k => k);
+        console.log('API Keys after split and trim:', apiKeys);  // 新增调试
         if (apiKeys.length > 0) {
           const selectedKey = apiKeys[Math.floor(Math.random() * apiKeys.length)];
           console.log(`Gemini Selected API Key: ${selectedKey}`);
           headers.set('x-goog-api-key', selectedKey);
+        } else {
+          console.log('No valid API Keys found in header');  // 新增调试
         }
-      } else {
-        if (key.trim().toLowerCase() === 'content-type') {
-          headers.set(key, value);
-        }
+      } else if (key.trim().toLowerCase() === 'content-type') {
+        headers.set(key, value);
       }
     }
 
-    console.log('Request Sending to Gemini')
-    console.log('targetUrl:' + targetUrl)
-    console.log(headers)
+    console.log('Forwarding Headers to Gemini:', JSON.stringify(Object.fromEntries(headers.entries())));  // 新增调试
+
+    console.log('Request Sending to Gemini');
+    console.log('targetUrl:' + targetUrl);
 
     const response = await fetch(targetUrl, {
       method: request.method,
@@ -63,12 +72,12 @@ export async function handleRequest(request) {
       body: request.body
     });
 
-    console.log("Call Gemini Success")
+    console.log("Call Gemini Success");
 
     const responseHeaders = new Headers(response.headers);
 
-    console.log('Header from Gemini:')
-    console.log(responseHeaders)
+    console.log('Header from Gemini:');
+    console.log(responseHeaders);
 
     responseHeaders.delete('transfer-encoding');
     responseHeaders.delete('connection');
