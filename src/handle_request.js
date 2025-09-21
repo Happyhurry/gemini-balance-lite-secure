@@ -57,19 +57,33 @@ export async function handleRequest(request) {
 
   // ====== 通过验证后，处理模型 / 路径 路由 ======
 
-  // 如果是 OpenAI 兼容路径
-  if (
-    (pathname.startsWith('/v1/') || pathname.startsWith('/v1beta/openai/')) &&
-    (pathname.endsWith('/chat/completions') ||
-     pathname.endsWith('/completions') ||
-     pathname.endsWith('/embeddings') ||
-     pathname.endsWith('/models'))
-  ) {
-    console.log('Routing to OpenAI fetch for path:', pathname);
-    return openai.fetch(request);
-  }
+// 如果是 OpenAI 兼容路径
+if (
+  (pathname.startsWith('/v1/') || pathname.startsWith('/v1beta/openai/')) &&
+  (pathname.endsWith('/chat/completions') ||
+   pathname.endsWith('/completions') ||
+   pathname.endsWith('/embeddings') ||
+   pathname.endsWith('/models'))
+) {
+  console.log('Routing to OpenAI fetch for path:', pathname);
+  return openai.fetch(request);
+}
 
-  // 否则走 Gemini 原生路径
+// 新增判断：router 发来的类似 "gemini-2.5-pro:streamGenerateContent" 路径，也走 Gemini 原生路径
+if (
+  // 有冒号或者 streamGenerateContent 的路径
+  pathname.includes(':') ||
+  pathname.toLowerCase().includes('streamgeneratecontent')
+) {
+  console.log('Routing to Gemini native (special path) for path:', pathname);
+  // 跳到 Gemini 部分，不要返回 404
+  // （下面的 Gemini 本体逻辑）
+} else {
+  // 如果不是 OpenAI 路径，也不匹配这些特例，还是默认 Gemini 原生路径
+  console.log('Routing to Gemini native default for path:', pathname);
+}
+
+// ====== Gemini 原生路径逻辑开始 ======
   const targetUrl = `https://generativelanguage.googleapis.com${pathname}${search}`;
   console.log('Routing to Gemini native path:', targetUrl);
 
