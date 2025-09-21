@@ -11,58 +11,83 @@ export async function handleRequest(request) {
   console.log('Incoming request URL:', request.url);
   console.log('Incoming headers:', JSON.stringify(Object.fromEntries(request.headers.entries())));
 
-  // 公开路径，不需要 API Key
+  // 对根目录或 index 显示状态
   if (pathname === '/' || pathname === '/index.html') {
-    return new Response('Proxy is Running! More Details: https://github.com/tech-shrimp/gemini-balance-lite', {
-      status: 200,
-      headers: { 'Content-Type': 'text/html' }
-    });
+    return new Response(
+      'Proxy is Running! More Details: https://github.com/tech-shrimp/gemini-balance-lite',
+      {
+        status: 200,
+        headers: { 'Content-Type': 'text/html' }
+      }
+    );
   }
 
-  // verify endpoint 公开
+  // /verify POST 公开
   if (pathname === '/verify' && request.method === 'POST') {
     return handleVerification(request);
   }
 
-  // 验证插件头部 X-API-Key
-  const apiKeyHeader = request.headers.get("X-API-Key");
-  const allowedKeysEnv = process.env.ALLOWED_KEYS || "";
-  const allowedKeys = allowedKeysEnv.split(",").map(k => k.trim()).filter(k => k);
+  // ====== 身份 / 密钥 验证部分 ======
+  // 支持 X-API-Key 或 Authorization: Bearer <key>
+  let authKey = request.headers.get('X-API-Key');
 
-  console.log('Allowed keys from env:', allowedKeys);
-  console.log('X-API-Key from request:', apiKeyHeader);
-
-  if (!apiKeyHeader || !allowedKeys.includes(apiKeyHeader)) {
-    return new Response(JSON.stringify({ error: "Invalid API Key" }), {
-      status: 401,
-      headers: { "Content-Type": "application/json" },
-    });
+  const authHeader = request.headers.get('Authorization');
+  if (!authKey && authHeader && authHeader.startsWith('Bearer ')) {
+    authKey = authHeader.substring('Bearer '.length).trim();
   }
 
-  // 判断是否是 OpenAI 兼容路径
+  const allowedKeysEnv = process.env.ALLOWED_KEYS || '';
+  const allowedKeys = allowedKeysEnv
+    .split(',')
+    .map(k => k.trim())
+    .filter(k => k);
+
+  console.log('Allowed keys from env:', allowedKeys);
+  console.log('Received auth key:', authKey);
+
+  if (!authKey || !allowedKeys.includes(authKey)) {
+    return new Response(
+      JSON.stringify({ error: 'Invalid API Key' }),
+      {
+        status: 401,
+        headers: { 'Content-Type': 'application/json' }
+      }
+    );
+  }
+
+  // ====== 通过验证后，处理模型 / 路径 路由 ======
+
+  // 如果是 OpenAI 兼容路径
   if (
-    (pathname.startsWith("/v1/") || pathname.startsWith("/v1beta/openai/")) &&
-    (pathname.endsWith("/chat/completions") ||
-     pathname.endsWith("/completions") ||
-     pathname.endsWith("/embeddings") ||
-     pathname.endsWith("/models"))
+    (pathname.startsWith('/v1/') || pathname.startsWith('/v1beta/openai/')) &&
+    (pathname.endsWith('/chat/completions') ||
+     pathname.endsWith('/completions') ||
+     pathname.endsWith('/embeddings') ||
+     pathname.endsWith('/models'))
   ) {
     console.log('Routing to OpenAI fetch for path:', pathname);
     return openai.fetch(request);
   }
 
-  // 否则为 Gemini 原生路径
+  // 否则走 Gemini 原生路径
   const targetUrl = `https://generativelanguage.googleapis.com${pathname}${search}`;
   console.log('Routing to Gemini native path:', targetUrl);
 
-  const apiKeysEnv = process.env.API_KEYS || "";
-  const geminiApiKeys = apiKeysEnv.split(",").map(k => k.trim()).filter(k => k);
+  const apiKeysEnv = process.env.API_KEYS || '';
+  const geminiApiKeys = apiKeysEnv
+    .split(',')
+    .map(k => k.trim())
+    .filter(k => k);
+
   if (geminiApiKeys.length === 0) {
-    console.error("No Gemini API keys configured in API_KEYS");
-    return new Response(JSON.stringify({ error: "Server misconfiguration" }), {
-      status: 500,
-      headers: { "Content-Type": "application/json" },
-    });
+    console.error('No Gemini API keys configured in API_KEYS');
+    return new Response(
+      JSON.stringify({ error: 'Server misconfiguration: no Gemini API keys' }),
+      {
+        status: 500,
+        headers: { 'Content-Type': 'application/json' }
+      }
+    );
   }
 
   const selectedKey = geminiApiKeys[Math.floor(Math.random() * geminiApiKeys.length)];
@@ -71,21 +96,23 @@ export async function handleRequest(request) {
   const headers = new Headers();
   for (const [key, value] of request.headers.entries()) {
     const lower = key.trim().toLowerCase();
+
     if (lower === 'x-goog-api-key') {
-      continue;  // 我们用我们自己选的 key 替代
+      continue; // 用我们挑选的替代
     }
     if (lower === 'content-type' || lower === 'accept') {
       headers.set(key, value);
     }
-    // 如果你想保留其他头（例如 user-agent 或其他），可以加在这里
+    // 如果你需要保留其他头（比如 user-agent 等），可以在这里加条件
   }
-  headers.set("x-goog-api-key", selectedKey);
+
+  headers.set('x-goog-api-key', selectedKey);
 
   try {
     const response = await fetch(targetUrl, {
       method: request.method,
       headers: headers,
-      body: request.body,
+      body: request.body
     });
 
     console.log('Gemini downstream status:', response.status);
@@ -100,13 +127,16 @@ export async function handleRequest(request) {
     const body = await response.arrayBuffer();
     return new Response(body, {
       status: response.status,
-      headers: responseHeaders,
+      headers: responseHeaders
     });
   } catch (error) {
     console.error('Error forwarding to Gemini:', error);
-    return new Response(JSON.stringify({ error: "Internal Server Error", details: error.stack }), {
-      status: 500,
-      headers: { "Content-Type": "application/json" },
-    });
+    return new Response(
+      JSON.stringify({ error: 'Internal Server Error', details: error?.stack }),
+      {
+        status: 500,
+        headers: { 'Content-Type': 'application/json' }
+      }
+    );
   }
 }
