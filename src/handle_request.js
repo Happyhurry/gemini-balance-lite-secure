@@ -3,6 +3,10 @@
 import { handleVerification } from './verify_keys.js';
 import openai from './openai.mjs';
 
+export const config = {
+  runtime: 'edge',  // 保持 Edge Runtime（因为你之前是这个 runtime）
+};
+
 export async function handleRequest(request) {
   const url = new URL(request.url);
   const pathname = url.pathname;
@@ -11,7 +15,7 @@ export async function handleRequest(request) {
   console.log('Incoming request URL:', request.url);
   console.log('Incoming headers:', JSON.stringify(Object.fromEntries(request.headers.entries())));
 
-  // 根目录或 index 显示状态
+  // 根或首页
   if (pathname === '/' || pathname === '/index.html') {
     return new Response(
       'Proxy is Running! More Details: https://github.com/tech-shrimp/gemini-balance-lite',
@@ -22,12 +26,12 @@ export async function handleRequest(request) {
     );
   }
 
-  // /verify 公开端点
+  // /verify POST 公开端点
   if (pathname === '/verify' && request.method === 'POST') {
     return handleVerification(request);
   }
 
-  // —— 身份验证部分 —— 支持 X-API-Key、Authorization: Bearer ..., 或 x-goog-api-key
+  // —— 身份验证 —— 支持 X-API-Key 或 Authorization: Bearer … 或 x-goog-api-key
   let authKey = request.headers.get('X-API-Key');
 
   const authHeader = request.headers.get('Authorization') || request.headers.get('authorization');
@@ -73,22 +77,22 @@ export async function handleRequest(request) {
     return openai.fetch(request);
   }
 
-  // —— 特殊 Gemini 路径处理 —— 修正 model:action 路径到标准 Gemini API 路径
+  // —— 特殊 Gemini 流式 / generateContent 路径处理 —— 包含 :streamGenerateContent 或 :generateContent
   if (
     pathname.includes(':') &&
     (pathname.toLowerCase().includes('streamgeneratecontent') || pathname.toLowerCase().includes('generatecontent'))
   ) {
-    console.log('Routing to Gemini native (special path) for path:', pathname);
-    // 假设路径形如 "/{model}:{action}"
+    console.log('Routing to Gemini native (special path for streaming/generateContent) for path:', pathname);
+    // 修正路径
     const parts = pathname.split(':');
     let modelPart = parts[0].startsWith('/') ? parts[0].substring(1) : parts[0];
-    const actionPart = parts[1];  // e.g. "streamGenerateContent" 或 "generateContent"
+    const actionPart = parts.slice(1).join(':');  // 支持如果 action 中也有冒号或额外部分
     const fixedPath = `/v1beta/models/${modelPart}:${actionPart}`;
 
     const newTargetUrl = `https://generativelanguage.googleapis.com${fixedPath}${search}`;
     console.log('FixedTargetUrl:', newTargetUrl);
 
-    // 使用 Gemini key 列表
+    // 准备 Gemini API Key
     const apiKeysEnv = process.env.API_KEYS || '';
     const geminiApiKeys = apiKeysEnv
       .split(',')
@@ -106,49 +110,51 @@ export async function handleRequest(request) {
     const selectedKey = geminiApiKeys[Math.floor(Math.random() * geminiApiKeys.length)];
     console.log('Selected Gemini API Key:', selectedKey);
 
-    const headers2 = new Headers();
+    // 构建下游请求 headers
+    const downstreamHeaders = new Headers();
     for (const [key, value] of request.headers.entries()) {
       const lower = key.trim().toLowerCase();
-      if (lower === 'x-goog-api-key') continue;  // 我们用新的
+      if (lower === 'x-goog-api-key') continue;
       if (lower === 'content-type' || lower === 'accept') {
-        headers2.set(key, value);
+        downstreamHeaders.set(key, value);
       }
     }
-    headers2.set('x-goog-api-key', selectedKey);
+    downstreamHeaders.set('x-goog-api-key', selectedKey);
+    // 如果需要 SSE / streaming，用 Accept: text/event-stream 或者依据 upstream 要求
+    downstreamHeaders.set('Accept', 'text/event-stream');
 
-    try {
-      const response2 = await fetch(newTargetUrl, {
-        method: request.method,
-        headers: headers2,
-        body: request.body
+    // 发起下游请求
+    const upstreamResponse = await fetch(newTargetUrl, {
+      method: request.method,
+      headers: downstreamHeaders,
+      body: request.body
+    });
+
+    console.log('Gemini downstream status (special path):', upstreamResponse.status);
+
+    if (!upstreamResponse.ok) {
+      const errText = await upstreamResponse.text();
+      return new Response(errText, {
+        status: upstreamResponse.status,
+        headers: { 'Content-Type': 'application/json' }
       });
-      console.log('Gemini downstream status (special path):', response2.status);
-
-      const responseHeaders2 = new Headers(response2.headers);
-      responseHeaders2.delete('transfer-encoding');
-      responseHeaders2.delete('connection');
-      responseHeaders2.delete('keep-alive');
-      responseHeaders2.delete('content-encoding');
-      responseHeaders2.set('Referrer-Policy', 'no-referrer');
-
-      const bodyBuffer2 = await response2.arrayBuffer();
-      return new Response(bodyBuffer2, {
-        status: response2.status,
-        headers: responseHeaders2
-      });
-    } catch (err) {
-      console.error('Error forwarding corrected Gemini path:', err);
-      return new Response(
-        JSON.stringify({ error: 'Internal Server Error', details: err?.stack }),
-        {
-          status: 500,
-          headers: { 'Content-Type': 'application/json' }
-        }
-      );
     }
+
+    // 流式转发响应
+    const responseHeaders2 = new Headers(upstreamResponse.headers);
+    // 保证正确内容类型
+    responseHeaders2.set('Content-Type', 'text/event-stream');
+    responseHeaders2.set('Referrer-Policy', 'no-referrer');
+
+    const bodyStream = upstreamResponse.body;
+
+    return new Response(bodyStream, {
+      status: 200,
+      headers: responseHeaders2
+    });
   }
 
-  // —— 默认 Gemini 原生路径 —— 非 OpenAI 路径，也非特例路径
+  // —— 默认 Gemini 原生路径 —— 非 OpenAI，也非特殊 generateContent 路径
   {
     const targetUrl = `https://generativelanguage.googleapis.com${pathname}${search}`;
     console.log('Routing to Gemini native default path:', targetUrl);
@@ -170,29 +176,25 @@ export async function handleRequest(request) {
     const selectedKey = geminiApiKeys[Math.floor(Math.random() * geminiApiKeys.length)];
     console.log('Selected Gemini API Key:', selectedKey);
 
-    const headers3 = new Headers();
+    const downstreamHeaders2 = new Headers();
     for (const [key, value] of request.headers.entries()) {
       const lower = key.trim().toLowerCase();
       if (lower === 'x-goog-api-key') continue;
       if (lower === 'content-type' || lower === 'accept') {
-        headers3.set(key, value);
+        downstreamHeaders2.set(key, value);
       }
     }
-    headers3.set('x-goog-api-key', selectedKey);
+    downstreamHeaders2.set('x-goog-api-key', selectedKey);
 
     try {
       const response3 = await fetch(targetUrl, {
         method: request.method,
-        headers: headers3,
+        headers: downstreamHeaders2,
         body: request.body
       });
       console.log('Gemini downstream status (default):', response3.status);
 
       const responseHeaders3 = new Headers(response3.headers);
-      responseHeaders3.delete('transfer-encoding');
-      responseHeaders3.delete('connection');
-      responseHeaders3.delete('keep-alive');
-      responseHeaders3.delete('content-encoding');
       responseHeaders3.set('Referrer-Policy', 'no-referrer');
 
       const bodyBuffer3 = await response3.arrayBuffer();
